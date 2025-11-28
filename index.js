@@ -53,28 +53,22 @@ app.get('/health', (req, res) => {
 
 /**
  * Endpoint para crear preferencia de pago
- * POST /api/checkout
+ * POST /api/create-preference
  */
-app.post('/api/checkout', async (req, res) => {
+app.post('/api/create-preference', async (req, res) => {
   try {
-    const { cart, customer, shipping } = req.body;
+    const { items, payer, shipments } = req.body;
 
-    // Validar datos requeridos
-    if (!cart || cart.length === 0) {
+    // Validar items
+    if (!items || items.length === 0) {
       return res.status(400).json({
-        error: 'El carrito está vacío'
-      });
-    }
-
-    if (!customer || !customer.name || !customer.email) {
-      return res.status(400).json({
-        error: 'Faltan datos del cliente'
+        error: 'No se proporcionaron items para el pago'
       });
     }
 
     // Calcular totales
-    const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const shippingCost = shipping?.cost || 2990;
+    const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const shippingCost = shipments?.cost || 2990;
     const total = subtotal + shippingCost;
 
     // Generar external_reference único
@@ -82,11 +76,11 @@ app.post('/api/checkout', async (req, res) => {
 
     // Crear preferencia de Mercado Pago
     const preferenceData = {
-      items: cart.map((item, index) => ({
+      items: items.map((item, index) => ({
         id: item.id || `item_${index + 1}`,
-        title: item.name,
-        description: item.short || item.name,
-        picture_url: item.images?.[0] ? `${process.env.FRONTEND_URL}${item.images[0]}` : undefined,
+        title: item.title || item.name,
+        description: item.description || 'Producto PetMAT para mascotas',
+        picture_url: item.picture_url || `${process.env.FRONTEND_URL}/assets/products/placeholder.png`,
         category_id: 'others',
         quantity: item.quantity,
         currency_id: 'CLP',
@@ -103,31 +97,12 @@ app.post('/api/checkout', async (req, res) => {
       auto_return: 'approved',
       
       // Información del pagador
-      payer: {
-        name: customer.name.split(' ')[0] || customer.name,
-        surname: customer.name.split(' ').slice(1).join(' ') || '',
-        email: customer.email,
-        phone: {
-          area_code: '56',
-          number: String(customer.phone).replace(/[^0-9]/g, '')
-        },
-        address: {
-          street_name: customer.address || '',
-          city_name: customer.city || 'Santiago',
-          state_name: customer.region || 'Región Metropolitana',
-          zip_code: ''
-        }
-      },
+      payer: payer || undefined,
       
       // Datos de envío
-      shipments: {
+      shipments: shipments || {
         cost: shippingCost,
-        mode: 'not_specified',
-        receiver_address: {
-          street_name: customer.address || '',
-          city_name: customer.city || 'Santiago',
-          state_name: customer.region || 'Región Metropolitana'
-        }
+        mode: 'not_specified'
       },
       
       // Configuraciones adicionales
@@ -147,13 +122,11 @@ app.post('/api/checkout', async (req, res) => {
       // Metadata (para recuperar en el webhook)
       metadata: {
         platform: 'petmat-web',
-        customer_name: customer.name,
-        customer_email: customer.email,
-        customer_phone: customer.phone,
-        shipping_address: customer.address,
-        shipping_city: customer.city,
-        shipping_region: customer.region,
-        items_count: cart.reduce((sum, item) => sum + item.quantity, 0),
+        items_count: items.reduce((sum, item) => sum + item.quantity, 0),
+        customer_email: payer?.email || '',
+        customer_name: payer?.name || '',
+        customer_phone: payer?.phone?.number || '',
+        shipping_address: payer?.address?.street_name || '',
         subtotal: subtotal,
         shipping_cost: shippingCost,
         total: total
