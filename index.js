@@ -160,9 +160,10 @@ app.post('/api/create-preference', async (req, res) => {
     console.log('✅ Preferencia creada:', response.id);
 
     res.json({
-      preferenceId: response.id,
-      initPoint: response.init_point,
-      externalReference: externalReference
+      id: response.id,
+      init_point: response.init_point,
+      sandbox_init_point: response.sandbox_init_point,
+      external_reference: externalReference
     });
 
   } catch (error) {
