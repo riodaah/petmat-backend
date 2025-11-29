@@ -133,7 +133,7 @@ app.post('/api/create-preference', async (req, res) => {
       }
     };
 
-    console.log('📦 Creando preferencia de pago para:', customer.email);
+    console.log('📦 Creando preferencia de pago para:', payer?.email || 'sin email');
 
     const response = await preference.create({ body: preferenceData });
 
