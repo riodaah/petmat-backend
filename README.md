@@ -131,6 +131,45 @@ Health check del servidor.
 
 ---
 
+### `GET /api/products/google-feed`
+Feed en JSON para Google con los 3 productos de PetMAT (nombre, descripción, stock, marca, precio, imágenes y campos de Merchant).
+
+**Response (resumen):**
+```json
+{
+  "feed_name": "petmat_google_products",
+  "feed_type": "google_merchant_json",
+  "language": "es",
+  "country": "CL",
+  "currency": "CLP",
+  "total_items": 3,
+  "items": [
+    {
+      "id": "p1",
+      "title": "Alfombra Olfativa PetMAT",
+      "description": "Alfombra olfativa de alta calidad...",
+      "availability": "in stock",
+      "condition": "new",
+      "brand": "PetMAT",
+      "price_feed": "26990.00 CLP",
+      "stock": 12
+    }
+  ]
+}
+```
+
+---
+
+### `GET /api/products/google-feed.xml`
+Feed RSS/XML compatible con Google Merchant Center para carga por URL.
+
+---
+
+### `GET /api/products`
+Catálogo de productos en JSON (incluye campos de Google + slug del producto).
+
+---
+
 ### `POST /api/checkout`
 Crea una preferencia de pago en Mercado Pago.
 

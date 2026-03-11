@@ -17,10 +17,121 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // Configurar Resend para envío de emails
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const FRONTEND_BASE_URL = process.env.FRONTEND_URL || 'https://petmat.cl';
+
+// Catalogo base de productos para feed de Google
+const PRODUCTS_CATALOG = [
+  {
+    id: 'p1',
+    slug: 'alfombra-olfativa',
+    name: 'Alfombra Olfativa PetMAT',
+    short: 'Estimulación mental y diversión para tu perro.',
+    description: 'Alfombra olfativa de alta calidad para esconder snacks y estimular el olfato de tu mascota. Material lavable, base antideslizante. Perfecta para reducir ansiedad y mantener a tu perro entretenido.',
+    price: 26990,
+    currency: 'CLP',
+    stock: 12,
+    category: 'Productos para mascotas > Enriquecimiento ambiental',
+    mpn: 'PETMAT-AO-001',
+    images: [
+      '/assets/products/p1/foto-principal.png',
+      '/assets/products/p1/sam-y-alfombra.png',
+      '/assets/products/p1/sam-y-alfombra-2.png',
+      '/assets/products/p1/conos.png',
+      '/assets/products/p1/polar.png',
+      '/assets/products/p1/escondite.png',
+      '/assets/products/p1/reverso.png'
+    ]
+  },
+  {
+    id: 'p2',
+    slug: 'alfombra-olfativa-circular',
+    name: 'Alfombra Olfativa Circular PetMAT',
+    short: 'Diseño circular único para mayor diversión.',
+    description: 'Alfombra olfativa con diseño circular innovador. Ideal para perros de todos los tamaños. Material premium, fácil de limpiar y con múltiples áreas de búsqueda para estimular el instinto natural de tu mascota.',
+    price: 19990,
+    currency: 'CLP',
+    stock: 10,
+    category: 'Productos para mascotas > Enriquecimiento ambiental',
+    mpn: 'PETMAT-AOC-001',
+    images: [
+      '/assets/products/p2/portada.png',
+      '/assets/products/p2/portada-2.png',
+      '/assets/products/p2/detalle.png',
+      '/assets/products/p2/pata-de-sam.png'
+    ]
+  },
+  {
+    id: 'p3',
+    slug: 'comedero-automatico',
+    name: 'Comedero Automático WiFi PetMAT',
+    short: 'Alimentación inteligente con cámara y WiFi.',
+    description: 'Comedero automático de última generación con cámara HD integrada, conexión WiFi y control desde tu smartphone. Programa horarios de alimentación, controla porciones y vigila a tu mascota desde cualquier lugar. Perfecto para mantener la rutina de alimentación incluso cuando no estás en casa.',
+    price: 44990,
+    currency: 'CLP',
+    stock: 7,
+    category: 'Productos para mascotas > Alimentación',
+    mpn: 'PETMAT-CAW-001',
+    images: [
+      '/assets/products/p3/portada-profesional.png',
+      '/assets/products/p3/camara-wifi-hd-2.png',
+      '/assets/products/p3/una-porción-hd.png',
+      '/assets/products/p3/accesorios-hd.png',
+      '/assets/products/p3/wifi-hd.png',
+      '/assets/products/p3/medidas-hd-2.png'
+    ]
+  }
+];
+
+function formatPriceForGoogle(price, currency) {
+  return `${Number(price).toFixed(2)} ${currency}`;
+}
+
+function buildProductUrls(product) {
+  return {
+    link: `${FRONTEND_BASE_URL}/producto/${product.slug}`,
+    image_link: `${FRONTEND_BASE_URL}${product.images[0]}`,
+    additional_image_link: product.images.slice(1).map((img) => `${FRONTEND_BASE_URL}${img}`)
+  };
+}
+
+function mapToGoogleProduct(product) {
+  const { link, image_link, additional_image_link } = buildProductUrls(product);
+
+  return {
+    id: product.id,
+    title: product.name,
+    description: product.description,
+    short_description: product.short,
+    link,
+    image_link,
+    additional_image_link,
+    availability: product.stock > 0 ? 'in stock' : 'out of stock',
+    condition: 'new',
+    brand: 'PetMAT',
+    price: {
+      value: Number(product.price).toFixed(2),
+      currency: product.currency
+    },
+    price_feed: formatPriceForGoogle(product.price, product.currency),
+    stock: product.stock,
+    mpn: product.mpn,
+    identifier_exists: true,
+    google_product_category: product.category
+  };
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
 // Middleware - CORS configurado para petmat.cl y variantes
 const allowedOrigins = [
@@ -69,6 +180,103 @@ app.get('/health', (req, res) => {
     version: '2.0.0',
     timestamp: new Date().toISOString()
   });
+});
+
+/**
+ * Catalogo base de productos
+ * GET /api/products
+ */
+app.get('/api/products', (req, res) => {
+  const products = PRODUCTS_CATALOG.map((product) => ({
+    ...mapToGoogleProduct(product),
+    product_slug: product.slug
+  }));
+
+  res.json({
+    brand: 'PetMAT',
+    total: products.length,
+    generated_at: new Date().toISOString(),
+    products
+  });
+});
+
+/**
+ * Feed de productos para Google (JSON)
+ * GET /api/products/google-feed
+ */
+app.get('/api/products/google-feed', (req, res) => {
+  const items = PRODUCTS_CATALOG.map(mapToGoogleProduct);
+
+  res.json({
+    feed_name: 'petmat_google_products',
+    feed_type: 'google_merchant_json',
+    generated_at: new Date().toISOString(),
+    language: 'es',
+    country: 'CL',
+    currency: 'CLP',
+    total_items: items.length,
+    items
+  });
+});
+
+/**
+ * Feed de productos para Google Merchant (RSS/XML)
+ * GET /api/products/google-feed.xml
+ */
+app.get('/api/products/google-feed.xml', (req, res) => {
+  const productItems = PRODUCTS_CATALOG.map((product) => {
+    const googleProduct = mapToGoogleProduct(product);
+    const additionalImagesXml = googleProduct.additional_image_link
+      .map((img) => `<g:additional_image_link>${escapeXml(img)}</g:additional_image_link>`)
+      .join('');
+
+    return `
+      <item>
+        <g:id>${escapeXml(googleProduct.id)}</g:id>
+        <g:title>${escapeXml(googleProduct.title)}</g:title>
+        <g:description>${escapeXml(googleProduct.description)}</g:description>
+        <g:link>${escapeXml(googleProduct.link)}</g:link>
+        <g:image_link>${escapeXml(googleProduct.image_link)}</g:image_link>
+        ${additionalImagesXml}
+        <g:availability>${escapeXml(googleProduct.availability)}</g:availability>
+        <g:condition>${escapeXml(googleProduct.condition)}</g:condition>
+        <g:price>${escapeXml(googleProduct.price_feed)}</g:price>
+        <g:brand>${escapeXml(googleProduct.brand)}</g:brand>
+        <g:mpn>${escapeXml(googleProduct.mpn)}</g:mpn>
+        <g:identifier_exists>yes</g:identifier_exists>
+        <g:google_product_category>${escapeXml(googleProduct.google_product_category)}</g:google_product_category>
+      </item>
+    `;
+  }).join('');
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">
+  <channel>
+    <title>PetMAT Product Feed</title>
+    <link>${escapeXml(FRONTEND_BASE_URL)}</link>
+    <description>Feed de productos PetMAT para Google Merchant Center</description>
+    ${productItems}
+  </channel>
+</rss>`;
+
+  res.set('Content-Type', 'application/xml');
+  return res.send(xml);
+});
+
+/**
+ * Producto individual por ID
+ * GET /api/products/:id
+ */
+app.get('/api/products/:id', (req, res) => {
+  const product = PRODUCTS_CATALOG.find((item) => item.id === req.params.id);
+
+  if (!product) {
+    return res.status(404).json({
+      error: 'Producto no encontrado'
+    });
+  }
+
+  return res.json(mapToGoogleProduct(product));
 });
 
 /**
