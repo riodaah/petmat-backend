@@ -11,13 +11,10 @@
 import express from 'express';
 import cors from 'cors';
 import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
-import { Resend } from 'resend';
+import emailjs from '@emailjs/nodejs';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-// Configurar Resend para envío de emails
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -131,6 +128,36 @@ function escapeXml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function formatCurrency(value) {
+  return `$${Number(value || 0).toLocaleString('es-CL')}`;
+}
+
+function buildItemsSummary(items = []) {
+  if (!items.length) {
+    return 'Sin productos';
+  }
+
+  return items
+    .map((item) => `- ${item.title} x${item.quantity} (${formatCurrency(item.unit_price)})`)
+    .join('\n');
+}
+
+async function sendEmailJsTemplate(templateId, templateParams, logLabel) {
+  const serviceId = process.env.EMAILJS_SERVICE_ID;
+  const publicKey = process.env.EMAILJS_PUBLIC_KEY;
+  const privateKey = process.env.EMAILJS_PRIVATE_KEY;
+
+  if (!serviceId || !publicKey || !privateKey || !templateId) {
+    console.warn(`⚠️ EmailJS incompleto para ${logLabel}, envío omitido`);
+    return;
+  }
+
+  await emailjs.send(serviceId, templateId, templateParams, {
+    publicKey,
+    privateKey
+  });
 }
 
 // Middleware - CORS configurado para petmat.cl y variantes
@@ -455,35 +482,55 @@ async function processPaymentNotification(paymentId) {
 
       // Email del administrador
       const adminEmail = process.env.ADMIN_EMAIL || 'da.morande@gmail.com';
+      const customerTemplateId = process.env.EMAILJS_TEMPLATE_ID_CUSTOMER;
+      const adminTemplateId = process.env.EMAILJS_TEMPLATE_ID_ADMIN;
+      const fromName = process.env.EMAILJS_FROM_NAME || 'PetMAT';
+      const itemsSummary = buildItemsSummary(orderData.items);
 
-      // 1. Enviar email al cliente
-      if (process.env.RESEND_API_KEY) {
-        try {
-          await resend.emails.send({
-            from: 'PetMAT <onboarding@resend.dev>',
-            to: orderData.email,
-            subject: `✅ Confirmación de compra #${orderData.orderNumber}`,
-            html: generateCustomerEmail(orderData)
-          });
-          console.log('✅ Email enviado al cliente:', orderData.email);
-        } catch (emailError) {
-          console.error('❌ Error al enviar email al cliente:', emailError);
-        }
+      const customerParams = {
+        to_email: orderData.email,
+        to_name: orderData.customerName,
+        from_name: fromName,
+        order_number: orderData.orderNumber,
+        payment_id: orderData.paymentId,
+        customer_name: orderData.customerName,
+        customer_email: orderData.email,
+        customer_phone: orderData.phone,
+        shipping_address: `${orderData.shippingAddress.street}, ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}`,
+        items_summary: itemsSummary,
+        subtotal: formatCurrency(orderData.subtotal),
+        shipping_cost: formatCurrency(orderData.shippingCost),
+        total: formatCurrency(orderData.total)
+      };
 
-        // 2. Enviar email al administrador
-        try {
-          await resend.emails.send({
-            from: 'PetMAT Notificaciones <onboarding@resend.dev>',
-            to: adminEmail,
-            subject: `🔔 Nueva orden #${orderData.orderNumber}`,
-            html: generateAdminEmail(orderData)
-          });
-          console.log('✅ Email enviado al admin:', adminEmail);
-        } catch (emailError) {
-          console.error('❌ Error al enviar email al admin:', emailError);
-        }
-      } else {
-        console.warn('⚠️ RESEND_API_KEY no configurado, emails desactivados');
+      const adminParams = {
+        to_email: adminEmail,
+        to_name: 'Admin PetMAT',
+        from_name: fromName,
+        order_number: orderData.orderNumber,
+        payment_id: orderData.paymentId,
+        customer_name: orderData.customerName,
+        customer_email: orderData.email,
+        customer_phone: orderData.phone,
+        shipping_address: `${orderData.shippingAddress.street}, ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}`,
+        items_summary: itemsSummary,
+        subtotal: formatCurrency(orderData.subtotal),
+        shipping_cost: formatCurrency(orderData.shippingCost),
+        total: formatCurrency(orderData.total)
+      };
+
+      try {
+        await sendEmailJsTemplate(customerTemplateId, customerParams, 'cliente');
+        console.log('✅ EmailJS enviado al cliente:', orderData.email);
+      } catch (emailError) {
+        console.error('❌ Error EmailJS cliente:', emailError);
+      }
+
+      try {
+        await sendEmailJsTemplate(adminTemplateId, adminParams, 'admin');
+        console.log('✅ EmailJS enviado al admin:', adminEmail);
+      } catch (emailError) {
+        console.error('❌ Error EmailJS admin:', emailError);
       }
 
     } else {
@@ -496,160 +543,6 @@ async function processPaymentNotification(paymentId) {
   }
 }
 
-/**
- * Generar HTML del email al cliente
- */
-function generateCustomerEmail(orderData) {
-  const itemsList = orderData.items.map(item => `
-    <tr>
-      <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.title}</td>
-      <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">${item.quantity}</td>
-      <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right;">$${item.unit_price?.toLocaleString('es-CL')}</td>
-    </tr>
-  `).join('');
-
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-    </head>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-      <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background: #6CC5E9; color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0;">¡Gracias por tu compra! 🐾</h1>
-        </div>
-        
-        <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
-          <p>Hola <strong>${orderData.customerName}</strong>,</p>
-          
-          <p>¡Tu pedido ha sido confirmado exitosamente!</p>
-          
-          <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h2 style="color: #6CC5E9; margin-top: 0;">Orden #${orderData.orderNumber}</h2>
-            
-            <table style="width: 100%; border-collapse: collapse;">
-              <thead>
-                <tr style="background: #f5f5f5;">
-                  <th style="padding: 10px; text-align: left;">Producto</th>
-                  <th style="padding: 10px; text-align: center;">Cantidad</th>
-                  <th style="padding: 10px; text-align: right;">Precio</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${itemsList}
-                <tr>
-                  <td colspan="2" style="padding: 10px; text-align: right;"><strong>Subtotal:</strong></td>
-                  <td style="padding: 10px; text-align: right;">$${orderData.subtotal?.toLocaleString('es-CL')}</td>
-                </tr>
-                <tr>
-                  <td colspan="2" style="padding: 10px; text-align: right;"><strong>Envío:</strong></td>
-                  <td style="padding: 10px; text-align: right;">$${orderData.shippingCost?.toLocaleString('es-CL')}</td>
-                </tr>
-                <tr style="background: #f5f5f5;">
-                  <td colspan="2" style="padding: 10px; text-align: right;"><strong>Total:</strong></td>
-                  <td style="padding: 10px; text-align: right;"><strong>$${orderData.total?.toLocaleString('es-CL')}</strong></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          
-          <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h3 style="color: #6CC5E9; margin-top: 0;">📦 Dirección de envío</h3>
-            <p>
-              ${orderData.shippingAddress.street}<br>
-              ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}
-            </p>
-          </div>
-          
-          <p style="color: #666; font-size: 14px; margin-top: 30px;">
-            Tu pedido será procesado en 2-5 días hábiles y te contactaremos para coordinar el despacho.
-          </p>
-          
-          <p style="color: #666; font-size: 14px;">
-            Si tienes alguna pregunta, contáctanos en <a href="mailto:info@petmat.cl" style="color: #6CC5E9;">info@petmat.cl</a>
-          </p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-}
-
-/**
- * Generar HTML del email al administrador
- */
-function generateAdminEmail(orderData) {
-  const itemsList = orderData.items.map(item => `
-    <tr>
-      <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.title}</td>
-      <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">${item.quantity}</td>
-      <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right;">$${item.unit_price?.toLocaleString('es-CL')}</td>
-    </tr>
-  `).join('');
-
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-    </head>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-      <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background: #333; color: white; padding: 20px; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0;">🔔 Nueva Orden - PetMAT</h1>
-        </div>
-        
-        <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
-          <h2 style="color: #6CC5E9;">Orden #${orderData.orderNumber}</h2>
-          
-          <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h3 style="margin-top: 0;">👤 Cliente</h3>
-            <p>
-              <strong>Nombre:</strong> ${orderData.customerName}<br>
-              <strong>Email:</strong> ${orderData.email}<br>
-              <strong>Teléfono:</strong> ${orderData.phone}
-            </p>
-          </div>
-          
-          <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h3 style="margin-top: 0;">📦 Productos</h3>
-            <table style="width: 100%; border-collapse: collapse;">
-              <thead>
-                <tr style="background: #f5f5f5;">
-                  <th style="padding: 10px; text-align: left;">Producto</th>
-                  <th style="padding: 10px; text-align: center;">Cantidad</th>
-                  <th style="padding: 10px; text-align: right;">Precio</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${itemsList}
-                <tr style="background: #f5f5f5;">
-                  <td colspan="2" style="padding: 10px; text-align: right;"><strong>Total:</strong></td>
-                  <td style="padding: 10px; text-align: right;"><strong>$${orderData.total?.toLocaleString('es-CL')}</strong></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          
-          <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h3 style="margin-top: 0;">🚚 Dirección de envío</h3>
-            <p>
-              ${orderData.shippingAddress.street}<br>
-              ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}
-            </p>
-          </div>
-          
-          <div style="background: #fff3cd; padding: 15px; border-radius: 8px; border-left: 4px solid #ffc107;">
-            <p style="margin: 0;"><strong>ID de Pago MP:</strong> ${orderData.paymentId}</p>
-          </div>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-}
-
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`
@@ -657,7 +550,7 @@ app.listen(PORT, () => {
   🚀 Servidor corriendo en puerto ${PORT}
   🌐 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:5173'}
   💳 Mercado Pago configurado: ${process.env.MP_ACCESS_TOKEN ? '✅' : '❌'}
-  📧 Resend configurado: ${process.env.RESEND_API_KEY ? '✅' : '❌'}
+  📧 EmailJS configurado: ${process.env.EMAILJS_SERVICE_ID && process.env.EMAILJS_PUBLIC_KEY && process.env.EMAILJS_PRIVATE_KEY ? '✅' : '❌'}
   `);
 });
 

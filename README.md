@@ -10,7 +10,7 @@ Backend simplificado para PetMAT - Integración segura con Mercado Pago.
 
 - ✅ **Sin base de datos** - Las órdenes se procesan via webhooks de Mercado Pago
 - ✅ **Access Token protegido** - Nunca se expone en el frontend
-- ✅ **Emails automáticos** - Con Resend (cliente + admin)
+- ✅ **Emails automáticos** - Con EmailJS (cliente + admin)
 - ✅ **Webhooks de MP** - Notificaciones en tiempo real
 - ✅ **Deploy en Railway** - Gratis y fácil
 
@@ -23,7 +23,7 @@ Backend simplificado para PetMAT - Integración segura con Mercado Pago.
 | Base de datos | PostgreSQL ❌ | Sin DB ✅ |
 | Dependencias | 5 paquetes | 5 paquetes |
 | Líneas de código | ~800 | ~400 |
-| Emails | EmailJS (manual) | Resend (auto) |
+| Emails | EmailJS (manual) | EmailJS (backend, automático) |
 | Complejidad | Alta | Baja |
 
 ---
@@ -57,8 +57,13 @@ FRONTEND_URL=https://petmat.cl
 # Backend URL (OPCIONAL - Railway lo crea automáticamente)
 BACKEND_URL=https://petmat-backend-production.up.railway.app
 
-# Resend (OPCIONAL - para emails automáticos)
-RESEND_API_KEY=re_tu_api_key_aqui
+# EmailJS (OPCIONAL - para emails automáticos)
+EMAILJS_SERVICE_ID=service_xxxxxxx
+EMAILJS_TEMPLATE_ID_CUSTOMER=template_cliente_xxxxx
+EMAILJS_TEMPLATE_ID_ADMIN=template_admin_xxxxx
+EMAILJS_PUBLIC_KEY=tu_public_key
+EMAILJS_PRIVATE_KEY=tu_private_key
+EMAILJS_FROM_NAME=PetMAT
 
 # Email del administrador (OPCIONAL)
 ADMIN_EMAIL=da.morande@gmail.com
@@ -93,7 +98,12 @@ En Railway → **"Variables"** → **"Raw Editor"**:
 ```env
 MP_ACCESS_TOKEN=APP_USR-tu_access_token_completo
 FRONTEND_URL=https://petmat.cl
-RESEND_API_KEY=re_tu_api_key
+EMAILJS_SERVICE_ID=service_xxxxxxx
+EMAILJS_TEMPLATE_ID_CUSTOMER=template_cliente_xxxxx
+EMAILJS_TEMPLATE_ID_ADMIN=template_admin_xxxxx
+EMAILJS_PUBLIC_KEY=tu_public_key
+EMAILJS_PRIVATE_KEY=tu_private_key
+EMAILJS_FROM_NAME=PetMAT
 ADMIN_EMAIL=da.morande@gmail.com
 ```
 
@@ -256,7 +266,7 @@ OK
 
 ## 📧 Emails Automáticos
 
-Si configuras `RESEND_API_KEY`, el sistema enviará automáticamente:
+Si configuras EmailJS (`EMAILJS_SERVICE_ID`, templates y keys), el sistema enviará automáticamente:
 
 ### **Al Cliente:**
 - ✅ Confirmación de compra
@@ -277,7 +287,7 @@ Si configuras `RESEND_API_KEY`, el sistema enviará automáticamente:
 | Servicio | Costo | Incluye |
 |----------|-------|---------|
 | **Railway** | $0/mes | 500 horas gratis |
-| **Resend** | $0/mes | 3,000 emails/mes gratis |
+| **EmailJS** | Según tu plan | Envío de emails transaccionales |
 | **Mercado Pago** | 3-5% por transacción | Procesamiento de pagos |
 | **TOTAL** | ~$0/mes | Suficiente para 100-200 órdenes/mes |
 
@@ -294,9 +304,9 @@ Si configuras `RESEND_API_KEY`, el sistema enviará automáticamente:
 - No incluyas "/" al final
 
 ### **Emails no llegan**
-- Verifica que `RESEND_API_KEY` esté configurado
+- Verifica que `EMAILJS_SERVICE_ID`, `EMAILJS_TEMPLATE_ID_CUSTOMER`, `EMAILJS_TEMPLATE_ID_ADMIN`, `EMAILJS_PUBLIC_KEY` y `EMAILJS_PRIVATE_KEY` estén configurados
 - Revisa los logs de Railway para errores
-- Resend requiere dominio verificado para producción
+- Verifica que ambos templates incluyan variables como `to_email`, `order_number`, `total` e `items_summary`
 
 ---
 
@@ -304,7 +314,7 @@ Si configuras `RESEND_API_KEY`, el sistema enviará automáticamente:
 
 1. **Sin PostgreSQL:** Las órdenes no se guardan en una base de datos. Mercado Pago guarda toda la info y puedes consultarla en su panel.
 
-2. **Resend (Opcional):** Si no configuras Resend, los emails no se enviarán, pero el checkout funcionará perfectamente.
+2. **EmailJS (Opcional):** Si no configuras EmailJS, los emails no se enviarán, pero el checkout funcionará perfectamente.
 
 3. **Admin Panel:** Para ver órdenes, usa el panel de Mercado Pago: https://www.mercadopago.cl/activities
 
@@ -335,7 +345,7 @@ npm install
 - **Proyecto:** da.morande@gmail.com
 - **Railway Docs:** https://docs.railway.app/
 - **Mercado Pago Docs:** https://www.mercadopago.cl/developers/
-- **Resend Docs:** https://resend.com/docs
+- **EmailJS Docs:** https://www.emailjs.com/docs/
 
 ---
 

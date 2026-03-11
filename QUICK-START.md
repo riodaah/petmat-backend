@@ -31,7 +31,12 @@ En Railway → Tu servicio → **"Variables"** → **"Raw Editor"**:
 ```env
 MP_ACCESS_TOKEN=APP_USR-tu_access_token_completo
 FRONTEND_URL=https://petmat.cl
-RESEND_API_KEY=re_tu_api_key_opcional
+EMAILJS_SERVICE_ID=service_xxxxxxx
+EMAILJS_TEMPLATE_ID_CUSTOMER=template_cliente_xxxxx
+EMAILJS_TEMPLATE_ID_ADMIN=template_admin_xxxxx
+EMAILJS_PUBLIC_KEY=tu_public_key
+EMAILJS_PRIVATE_KEY=tu_private_key
+EMAILJS_FROM_NAME=PetMAT
 ADMIN_EMAIL=da.morande@gmail.com
 ```
 
