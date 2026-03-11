@@ -31,6 +31,10 @@ En Railway → Tu servicio → **"Variables"** → **"Raw Editor"**:
 ```env
 MP_ACCESS_TOKEN=APP_USR-tu_access_token_completo
 FRONTEND_URL=https://petmat.cl
+ALLOWED_ORIGINS=https://petmat-8d651.web.app,https://petmat.cl,https://www.petmat.cl
+FIREBASE_PROJECT_ID=petmat-8d651
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@petmat-8d651.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 EMAILJS_SERVICE_ID=service_xxxxxxx
 EMAILJS_TEMPLATE_ID_CUSTOMER=template_cliente_xxxxx
 EMAILJS_TEMPLATE_ID_ADMIN=template_admin_xxxxx
@@ -41,6 +45,12 @@ ADMIN_EMAIL=da.morande@gmail.com
 ```
 
 **Click:** "Update Variables"
+
+Luego corre seed inicial (una sola vez):
+
+```bash
+npm run seed:products
+```
 
 ---
 

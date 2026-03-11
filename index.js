@@ -13,85 +13,27 @@ import cors from 'cors';
 import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
 import emailjs from '@emailjs/nodejs';
 import dotenv from 'dotenv';
+import { initFirebaseAdmin } from './firebaseAdmin.js';
+import { getActiveProducts, getAllProducts, getProductById } from './productCatalogService.js';
 
 dotenv.config();
+initFirebaseAdmin();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const FRONTEND_BASE_URL = process.env.FRONTEND_URL || 'https://petmat.cl';
-
-// Catalogo base de productos para feed de Google
-const PRODUCTS_CATALOG = [
-  {
-    id: 'p1',
-    slug: 'alfombra-olfativa',
-    name: 'Alfombra Olfativa PetMAT',
-    short: 'Estimulación mental y diversión para tu perro.',
-    description: 'Alfombra olfativa de alta calidad para esconder snacks y estimular el olfato de tu mascota. Material lavable, base antideslizante. Perfecta para reducir ansiedad y mantener a tu perro entretenido.',
-    price: 26990,
-    currency: 'CLP',
-    stock: 12,
-    category: 'Productos para mascotas > Enriquecimiento ambiental',
-    mpn: 'PETMAT-AO-001',
-    images: [
-      '/assets/products/p1/foto-principal.png',
-      '/assets/products/p1/sam-y-alfombra.png',
-      '/assets/products/p1/sam-y-alfombra-2.png',
-      '/assets/products/p1/conos.png',
-      '/assets/products/p1/polar.png',
-      '/assets/products/p1/escondite.png',
-      '/assets/products/p1/reverso.png'
-    ]
-  },
-  {
-    id: 'p2',
-    slug: 'alfombra-olfativa-circular',
-    name: 'Alfombra Olfativa Circular PetMAT',
-    short: 'Diseño circular único para mayor diversión.',
-    description: 'Alfombra olfativa con diseño circular innovador. Ideal para perros de todos los tamaños. Material premium, fácil de limpiar y con múltiples áreas de búsqueda para estimular el instinto natural de tu mascota.',
-    price: 19990,
-    currency: 'CLP',
-    stock: 10,
-    category: 'Productos para mascotas > Enriquecimiento ambiental',
-    mpn: 'PETMAT-AOC-001',
-    images: [
-      '/assets/products/p2/portada.png',
-      '/assets/products/p2/portada-2.png',
-      '/assets/products/p2/detalle.png',
-      '/assets/products/p2/pata-de-sam.png'
-    ]
-  },
-  {
-    id: 'p3',
-    slug: 'comedero-automatico',
-    name: 'Comedero Automático WiFi PetMAT',
-    short: 'Alimentación inteligente con cámara y WiFi.',
-    description: 'Comedero automático de última generación con cámara HD integrada, conexión WiFi y control desde tu smartphone. Programa horarios de alimentación, controla porciones y vigila a tu mascota desde cualquier lugar. Perfecto para mantener la rutina de alimentación incluso cuando no estás en casa.',
-    price: 44990,
-    currency: 'CLP',
-    stock: 7,
-    category: 'Productos para mascotas > Alimentación',
-    mpn: 'PETMAT-CAW-001',
-    images: [
-      '/assets/products/p3/portada-profesional.png',
-      '/assets/products/p3/camara-wifi-hd-2.png',
-      '/assets/products/p3/una-porción-hd.png',
-      '/assets/products/p3/accesorios-hd.png',
-      '/assets/products/p3/wifi-hd.png',
-      '/assets/products/p3/medidas-hd-2.png'
-    ]
-  }
-];
 
 function formatPriceForGoogle(price, currency) {
   return `${Number(price).toFixed(2)} ${currency}`;
 }
 
 function buildProductUrls(product) {
+  const primaryImage = product.images?.[0] || '/assets/products/placeholder.png';
+  const extraImages = Array.isArray(product.images) ? product.images.slice(1) : [];
   return {
     link: `${FRONTEND_BASE_URL}/producto/${product.slug}`,
-    image_link: `${FRONTEND_BASE_URL}${product.images[0]}`,
-    additional_image_link: product.images.slice(1).map((img) => `${FRONTEND_BASE_URL}${img}`)
+    image_link: `${FRONTEND_BASE_URL}${primaryImage}`,
+    additional_image_link: extraImages.map((img) => `${FRONTEND_BASE_URL}${img}`)
   };
 }
 
@@ -108,12 +50,13 @@ function mapToGoogleProduct(product) {
     additional_image_link,
     availability: product.stock > 0 ? 'in stock' : 'out of stock',
     condition: 'new',
-    brand: 'PetMAT',
+    brand: product.brand || 'PetMAT',
     price: {
-      value: Number(product.price).toFixed(2),
+      value: Number(product.finalPrice || product.price).toFixed(2),
       currency: product.currency
     },
-    price_feed: formatPriceForGoogle(product.price, product.currency),
+    price_feed: formatPriceForGoogle(product.finalPrice || product.price, product.currency),
+    base_price_feed: formatPriceForGoogle(product.price, product.currency),
     stock: product.stock,
     mpn: product.mpn,
     identifier_exists: true,
@@ -164,9 +107,11 @@ async function sendEmailJsTemplate(templateId, templateParams, logLabel) {
 const allowedOrigins = [
   'https://petmat.cl',
   'https://www.petmat.cl',
+  'https://petmat-8d651.web.app',
   'http://localhost:5173',
   'http://localhost:3000',
-  process.env.FRONTEND_URL
+  process.env.FRONTEND_URL,
+  ...(process.env.ALLOWED_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean)
 ].filter(Boolean);
 
 app.use(cors({
@@ -177,7 +122,7 @@ app.use(cors({
     if (allowedOrigins.some(allowed => origin.includes(allowed.replace(/^https?:\/\//, '')))) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(null, false);
     }
   },
   credentials: true,
@@ -213,70 +158,81 @@ app.get('/health', (req, res) => {
  * Catalogo base de productos
  * GET /api/products
  */
-app.get('/api/products', (req, res) => {
-  const products = PRODUCTS_CATALOG.map((product) => ({
-    ...mapToGoogleProduct(product),
-    product_slug: product.slug
-  }));
+app.get('/api/products', async (req, res) => {
+  try {
+    const products = (await getActiveProducts()).map((product) => ({
+      ...product,
+      product_slug: product.slug
+    }));
 
-  res.json({
-    brand: 'PetMAT',
-    total: products.length,
-    generated_at: new Date().toISOString(),
-    products
-  });
+    res.json({
+      brand: 'PetMAT',
+      total: products.length,
+      generated_at: new Date().toISOString(),
+      products
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo productos:', error);
+    res.status(500).json({ error: 'No se pudo obtener el catálogo de productos' });
+  }
 });
 
 /**
  * Feed de productos para Google (JSON)
  * GET /api/products/google-feed
  */
-app.get('/api/products/google-feed', (req, res) => {
-  const items = PRODUCTS_CATALOG.map(mapToGoogleProduct);
+app.get('/api/products/google-feed', async (req, res) => {
+  try {
+    const items = (await getActiveProducts()).map(mapToGoogleProduct);
 
-  res.json({
-    feed_name: 'petmat_google_products',
-    feed_type: 'google_merchant_json',
-    generated_at: new Date().toISOString(),
-    language: 'es',
-    country: 'CL',
-    currency: 'CLP',
-    total_items: items.length,
-    items
-  });
+    res.json({
+      feed_name: 'petmat_google_products',
+      feed_type: 'google_merchant_json',
+      generated_at: new Date().toISOString(),
+      language: 'es',
+      country: 'CL',
+      currency: 'CLP',
+      total_items: items.length,
+      items
+    });
+  } catch (error) {
+    console.error('❌ Error generando feed JSON:', error);
+    res.status(500).json({ error: 'No se pudo generar feed de productos' });
+  }
 });
 
 /**
  * Feed de productos para Google Merchant (RSS/XML)
  * GET /api/products/google-feed.xml
  */
-app.get('/api/products/google-feed.xml', (req, res) => {
-  const productItems = PRODUCTS_CATALOG.map((product) => {
-    const googleProduct = mapToGoogleProduct(product);
-    const additionalImagesXml = googleProduct.additional_image_link
-      .map((img) => `<g:additional_image_link>${escapeXml(img)}</g:additional_image_link>`)
-      .join('');
+app.get('/api/products/google-feed.xml', async (req, res) => {
+  try {
+    const productItems = (await getActiveProducts()).map((product) => {
+      const googleProduct = mapToGoogleProduct(product);
+      const additionalImagesXml = googleProduct.additional_image_link
+        .map((img) => `<g:additional_image_link>${escapeXml(img)}</g:additional_image_link>`)
+        .join('');
 
-    return `
-      <item>
-        <g:id>${escapeXml(googleProduct.id)}</g:id>
-        <g:title>${escapeXml(googleProduct.title)}</g:title>
-        <g:description>${escapeXml(googleProduct.description)}</g:description>
-        <g:link>${escapeXml(googleProduct.link)}</g:link>
-        <g:image_link>${escapeXml(googleProduct.image_link)}</g:image_link>
-        ${additionalImagesXml}
-        <g:availability>${escapeXml(googleProduct.availability)}</g:availability>
-        <g:condition>${escapeXml(googleProduct.condition)}</g:condition>
-        <g:price>${escapeXml(googleProduct.price_feed)}</g:price>
-        <g:brand>${escapeXml(googleProduct.brand)}</g:brand>
-        <g:mpn>${escapeXml(googleProduct.mpn)}</g:mpn>
-        <g:identifier_exists>yes</g:identifier_exists>
-        <g:google_product_category>${escapeXml(googleProduct.google_product_category)}</g:google_product_category>
-      </item>
-    `;
-  }).join('');
+      return `
+        <item>
+          <g:id>${escapeXml(googleProduct.id)}</g:id>
+          <g:title>${escapeXml(googleProduct.title)}</g:title>
+          <g:description>${escapeXml(googleProduct.description)}</g:description>
+          <g:link>${escapeXml(googleProduct.link)}</g:link>
+          <g:image_link>${escapeXml(googleProduct.image_link)}</g:image_link>
+          ${additionalImagesXml}
+          <g:availability>${escapeXml(googleProduct.availability)}</g:availability>
+          <g:condition>${escapeXml(googleProduct.condition)}</g:condition>
+          <g:price>${escapeXml(googleProduct.price_feed)}</g:price>
+          <g:brand>${escapeXml(googleProduct.brand)}</g:brand>
+          <g:mpn>${escapeXml(googleProduct.mpn)}</g:mpn>
+          <g:identifier_exists>yes</g:identifier_exists>
+          <g:google_product_category>${escapeXml(googleProduct.google_product_category)}</g:google_product_category>
+        </item>
+      `;
+    }).join('');
 
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">
   <channel>
     <title>PetMAT Product Feed</title>
@@ -286,16 +242,20 @@ app.get('/api/products/google-feed.xml', (req, res) => {
   </channel>
 </rss>`;
 
-  res.set('Content-Type', 'application/xml');
-  return res.send(xml);
+    res.set('Content-Type', 'application/xml');
+    return res.send(xml);
+  } catch (error) {
+    console.error('❌ Error generando feed XML:', error);
+    return res.status(500).send('No se pudo generar feed XML');
+  }
 });
 
 /**
  * Producto individual por ID
  * GET /api/products/:id
  */
-app.get('/api/products/:id', (req, res) => {
-  const product = PRODUCTS_CATALOG.find((item) => item.id === req.params.id);
+app.get('/api/products/:id', async (req, res) => {
+  const product = await getProductById(req.params.id);
 
   if (!product) {
     return res.status(404).json({
@@ -303,7 +263,7 @@ app.get('/api/products/:id', (req, res) => {
     });
   }
 
-  return res.json(mapToGoogleProduct(product));
+  return res.json(product);
 });
 
 /**
@@ -321,9 +281,52 @@ app.post('/api/create-preference', async (req, res) => {
       });
     }
 
-    // Calcular totales
-    const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const shippingCost = shipments?.cost || 2990;
+    const catalogProducts = await getActiveProducts();
+    const catalogById = new Map(catalogProducts.map((p) => [p.id, p]));
+    const invalidItems = [];
+
+    const normalizedItems = items.map((item) => {
+      const product = catalogById.get(item.id);
+      const quantity = Number(item.quantity || 1);
+
+      if (!product) {
+        invalidItems.push({ id: item.id, reason: 'Producto no existe o está inactivo' });
+        return null;
+      }
+
+      if (!Number.isInteger(quantity) || quantity <= 0 || quantity > 10) {
+        invalidItems.push({ id: item.id, reason: 'Cantidad inválida' });
+        return null;
+      }
+
+      if (product.stock < quantity) {
+        invalidItems.push({ id: item.id, reason: `Stock insuficiente (disponible: ${product.stock})` });
+        return null;
+      }
+
+      return {
+        id: product.id,
+        title: product.name,
+        description: product.description || 'Producto PetMAT para mascotas',
+        picture_url: product.images?.[0] ? `${FRONTEND_BASE_URL}${product.images[0]}` : `${FRONTEND_BASE_URL}/assets/products/placeholder.png`,
+        category_id: 'others',
+        quantity,
+        currency_id: product.currency || 'CLP',
+        unit_price: parseFloat(product.finalPrice)
+      };
+    }).filter(Boolean);
+
+    if (invalidItems.length > 0) {
+      return res.status(400).json({
+        error: 'Carrito inválido',
+        details: invalidItems
+      });
+    }
+
+    // Calcular totales desde catálogo servidor (no confiar en frontend)
+    const subtotal = normalizedItems.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
+    const isRM = payer?.address?.state_name?.toLowerCase().includes('metropolitana');
+    const shippingCost = isRM ? 2990 : 3990;
     const total = subtotal + shippingCost;
 
     // Generar external_reference único
@@ -331,16 +334,7 @@ app.post('/api/create-preference', async (req, res) => {
 
     // Crear preferencia de Mercado Pago
     const preferenceData = {
-      items: items.map((item, index) => ({
-        id: item.id || `item_${index + 1}`,
-        title: item.title || item.name,
-        description: item.description || 'Producto PetMAT para mascotas',
-        picture_url: item.picture_url || `${process.env.FRONTEND_URL}/assets/products/placeholder.png`,
-        category_id: 'others',
-        quantity: item.quantity,
-        currency_id: 'CLP',
-        unit_price: parseFloat(item.price)
-      })),
+      items: normalizedItems,
       
       // URLs de retorno
       back_urls: {
@@ -382,6 +376,8 @@ app.post('/api/create-preference', async (req, res) => {
         customer_name: payer?.name || '',
         customer_phone: payer?.phone?.number || '',
         shipping_address: payer?.address?.street_name || '',
+        shipping_city: payer?.address?.city_name || '',
+        shipping_region: payer?.address?.state_name || '',
         subtotal: subtotal,
         shipping_cost: shippingCost,
         total: total

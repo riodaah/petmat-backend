@@ -1,0 +1,93 @@
+[
+  {
+    "id": "p1",
+    "slug": "alfombra-olfativa",
+    "name": "Alfombra Olfativa PetMAT",
+    "short": "Estimulación mental y diversión para tu perro.",
+    "description": "Alfombra olfativa de alta calidad para esconder snacks y estimular el olfato de tu mascota. Material lavable, base antideslizante. Perfecta para reducir ansiedad y mantener a tu perro entretenido.",
+    "brand": "PetMAT",
+    "price": 26990,
+    "offerPrice": null,
+    "hasOffer": false,
+    "currency": "CLP",
+    "stock": 12,
+    "active": true,
+    "category": "Productos para mascotas > Enriquecimiento ambiental",
+    "mpn": "PETMAT-AO-001",
+    "features": [
+      "Material lavable y resistente",
+      "Base antideslizante",
+      "Estimula el olfato y reduce ansiedad",
+      "Múltiples escondites para premios"
+    ],
+    "images": [
+      "/assets/products/p1/foto-principal.png",
+      "/assets/products/p1/sam-y-alfombra.png",
+      "/assets/products/p1/sam-y-alfombra-2.png",
+      "/assets/products/p1/conos.png",
+      "/assets/products/p1/polar.png",
+      "/assets/products/p1/escondite.png",
+      "/assets/products/p1/reverso.png"
+    ]
+  },
+  {
+    "id": "p2",
+    "slug": "alfombra-olfativa-circular",
+    "name": "Alfombra Olfativa Circular PetMAT",
+    "short": "Diseño circular único para mayor diversión.",
+    "description": "Alfombra olfativa con diseño circular innovador. Ideal para perros de todos los tamaños. Material premium, fácil de limpiar y con múltiples áreas de búsqueda para estimular el instinto natural de tu mascota.",
+    "brand": "PetMAT",
+    "price": 19990,
+    "offerPrice": null,
+    "hasOffer": false,
+    "currency": "CLP",
+    "stock": 10,
+    "active": true,
+    "category": "Productos para mascotas > Enriquecimiento ambiental",
+    "mpn": "PETMAT-AOC-001",
+    "features": [
+      "Diseño circular único",
+      "Material premium de alta durabilidad",
+      "Múltiples texturas y escondites",
+      "Fácil limpieza y mantenimiento"
+    ],
+    "images": [
+      "/assets/products/p2/portada.png",
+      "/assets/products/p2/portada-2.png",
+      "/assets/products/p2/detalle.png",
+      "/assets/products/p2/pata-de-sam.png"
+    ]
+  },
+  {
+    "id": "p3",
+    "slug": "comedero-automatico",
+    "name": "Comedero Automático WiFi PetMAT",
+    "short": "Alimentación inteligente con cámara y WiFi.",
+    "description": "Comedero automático de última generación con cámara HD integrada, conexión WiFi y control desde tu smartphone. Programa horarios de alimentación, controla porciones y vigila a tu mascota desde cualquier lugar. Perfecto para mantener la rutina de alimentación incluso cuando no estás en casa.",
+    "brand": "PetMAT",
+    "price": 44990,
+    "offerPrice": null,
+    "hasOffer": false,
+    "currency": "CLP",
+    "stock": 7,
+    "active": true,
+    "category": "Productos para mascotas > Alimentación",
+    "mpn": "PETMAT-CAW-001",
+    "features": [
+      "Cámara HD con visión nocturna",
+      "Control WiFi desde tu smartphone",
+      "Porciones programables",
+      "Grabación de audio bidireccional",
+      "Capacidad 4L de alimento",
+      "Batería de respaldo"
+    ],
+    "images": [
+      "/assets/products/p3/portada-profesional.png",
+      "/assets/products/p3/camara-wifi-hd-2.png",
+      "/assets/products/p3/una-porción-hd.png",
+      "/assets/products/p3/accesorios-hd.png",
+      "/assets/products/p3/wifi-hd.png",
+      "/assets/products/p3/medidas-hd-2.png"
+    ]
+  }
+]

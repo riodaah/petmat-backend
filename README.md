@@ -57,6 +57,15 @@ FRONTEND_URL=https://petmat.cl
 # Backend URL (OPCIONAL - Railway lo crea automáticamente)
 BACKEND_URL=https://petmat-backend-production.up.railway.app
 
+# CORS extra (OPCIONAL, separadas por coma)
+ALLOWED_ORIGINS=https://petmat-8d651.web.app,https://petmat.cl,https://www.petmat.cl
+
+# Firebase Admin (OBLIGATORIO para catálogo centralizado)
+FIREBASE_PROJECT_ID=petmat-8d651
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@petmat-8d651.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+# Alternativa: FIREBASE_SERVICE_ACCOUNT_JSON='{"project_id":"...","client_email":"...","private_key":"..."}'
+
 # EmailJS (OPCIONAL - para emails automáticos)
 EMAILJS_SERVICE_ID=service_xxxxxxx
 EMAILJS_TEMPLATE_ID_CUSTOMER=template_cliente_xxxxx
@@ -98,6 +107,10 @@ En Railway → **"Variables"** → **"Raw Editor"**:
 ```env
 MP_ACCESS_TOKEN=APP_USR-tu_access_token_completo
 FRONTEND_URL=https://petmat.cl
+ALLOWED_ORIGINS=https://petmat-8d651.web.app,https://petmat.cl,https://www.petmat.cl
+FIREBASE_PROJECT_ID=petmat-8d651
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@petmat-8d651.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 EMAILJS_SERVICE_ID=service_xxxxxxx
 EMAILJS_TEMPLATE_ID_CUSTOMER=template_cliente_xxxxx
 EMAILJS_TEMPLATE_ID_ADMIN=template_admin_xxxxx
@@ -177,6 +190,11 @@ Feed RSS/XML compatible con Google Merchant Center para carga por URL.
 
 ### `GET /api/products`
 Catálogo de productos en JSON (incluye campos de Google + slug del producto).
+
+---
+
+### `npm run seed:products`
+Carga/actualiza en Firestore el catálogo inicial de productos desde `data/products.seed.json`.
 
 ---
 
