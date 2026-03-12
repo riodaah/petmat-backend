@@ -3,10 +3,39 @@ import { getFirestore } from './firebaseAdmin.js';
 
 const PRODUCTS_COLLECTION = 'products';
 
+function parseMoneyCLP(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return 0;
+
+  const raw = value.trim();
+  if (!raw) return 0;
+
+  // Acepta formatos como "16.990", "16,990", "$16.990", "16990"
+  const cleaned = raw.replace(/[^\d.,-]/g, '');
+
+  if (cleaned.includes('.') && !cleaned.includes(',')) {
+    const parts = cleaned.split('.');
+    // Si hay 3 dígitos en el último bloque, tratamos "." como separador de miles.
+    if (parts[parts.length - 1].length === 3) {
+      return Number(parts.join(''));
+    }
+  }
+
+  if (cleaned.includes(',') && !cleaned.includes('.')) {
+    const parts = cleaned.split(',');
+    if (parts[parts.length - 1].length === 3) {
+      return Number(parts.join(''));
+    }
+  }
+
+  // Fallback general
+  return Number(cleaned.replace(/[.,](?=\d{3}\b)/g, '').replace(',', '.')) || 0;
+}
+
 function normalizeProduct(raw) {
-  const price = Number(raw.price || 0);
+  const price = parseMoneyCLP(raw.price || 0);
   const hasOffer = Boolean(raw.hasOffer && raw.offerPrice);
-  const offerPrice = raw.offerPrice ? Number(raw.offerPrice) : null;
+  const offerPrice = raw.offerPrice ? parseMoneyCLP(raw.offerPrice) : null;
   const finalPrice = hasOffer && offerPrice > 0 && offerPrice < price ? offerPrice : price;
 
   return {

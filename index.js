@@ -12,6 +12,7 @@ import express from 'express';
 import cors from 'cors';
 import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
 import emailjs from '@emailjs/nodejs';
+import sgMail from '@sendgrid/mail';
 import dotenv from 'dotenv';
 import { initFirebaseAdmin } from './firebaseAdmin.js';
 import { getActiveProducts, getAllProducts, getProductById } from './productCatalogService.js';
@@ -103,6 +104,50 @@ async function sendEmailJsTemplate(templateId, templateParams, logLabel) {
   });
 }
 
+async function sendContactMessage(payload) {
+  const toEmail = process.env.CONTACT_TO_EMAIL || process.env.ADMIN_EMAIL || 'da.morande@gmail.com';
+  const fromName = process.env.EMAILJS_FROM_NAME || 'PetMAT';
+  const subject = `Nuevo contacto web - ${payload.name}`;
+
+  // Priorizar SendGrid si está configurado
+  if (process.env.SENDGRID_API_KEY) {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || toEmail;
+    await sgMail.send({
+      to: toEmail,
+      from: fromEmail,
+      subject,
+      text: [
+        `Nombre: ${payload.name}`,
+        `Email: ${payload.email}`,
+        `Teléfono: ${payload.phone || 'No informado'}`,
+        '',
+        payload.message
+      ].join('\n')
+    });
+    return { provider: 'sendgrid' };
+  }
+
+  // Fallback a EmailJS backend
+  const contactTemplateId =
+    process.env.EMAILJS_TEMPLATE_ID_CONTACT || process.env.EMAILJS_TEMPLATE_ID_ADMIN;
+  await sendEmailJsTemplate(
+    contactTemplateId,
+    {
+      to_email: toEmail,
+      to_name: 'Equipo PetMAT',
+      from_name: fromName,
+      subject,
+      customer_name: payload.name,
+      customer_email: payload.email,
+      customer_phone: payload.phone || 'No informado',
+      message: payload.message
+    },
+    'contacto'
+  );
+  return { provider: 'emailjs' };
+}
+
 // Middleware - CORS configurado para petmat.cl y variantes
 const allowedOrigins = [
   'https://petmat.cl',
@@ -131,6 +176,27 @@ app.use(cors({
 }));
 
 app.use(express.json());
+
+app.post('/api/contact', async (req, res) => {
+  try {
+    const { name, email, phone, message } = req.body || {};
+
+    if (!name || !email || !message) {
+      return res.status(400).json({
+        error: 'Faltan campos obligatorios (name, email, message)'
+      });
+    }
+
+    await sendContactMessage({ name, email, phone, message });
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('❌ Error enviando contacto:', error);
+    return res.status(500).json({
+      error: 'No se pudo enviar el mensaje de contacto',
+      details: error.message
+    });
+  }
+});
 
 // Configurar Mercado Pago
 const client = new MercadoPagoConfig({
@@ -326,7 +392,7 @@ app.post('/api/create-preference', async (req, res) => {
     // Calcular totales desde catálogo servidor (no confiar en frontend)
     const subtotal = normalizedItems.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
     const isRM = payer?.address?.state_name?.toLowerCase().includes('metropolitana');
-    const shippingCost = isRM ? 2990 : 3990;
+    const shippingCost = isRM ? 0 : 3990;
     const total = subtotal + shippingCost;
 
     // Generar external_reference único
