@@ -177,6 +177,31 @@ app.use(cors({
 
 app.use(express.json());
 
+app.post('/api/checkout-diagnostics', (req, res) => {
+  try {
+    const payload = req.body || {};
+    const traceId = payload.trace_id || `diag_${Date.now()}`;
+    const stage = payload.stage || 'unknown_stage';
+
+    console.log('🧭 Checkout diagnostics', JSON.stringify({
+      trace_id: traceId,
+      stage,
+      source: payload.source || 'unknown_source',
+      query: payload.query || {},
+      checkout_snapshot: payload.checkout_snapshot || null,
+      error_message: payload.error_message || null,
+      checkout_context: payload.checkout_context || null,
+      browser: payload.browser || null,
+      timestamp: new Date().toISOString()
+    }));
+
+    return res.json({ ok: true, trace_id: traceId });
+  } catch (error) {
+    console.error('❌ Error registrando diagnóstico de checkout:', error);
+    return res.status(500).json({ error: 'No se pudo registrar diagnóstico' });
+  }
+});
+
 app.post('/api/contact', async (req, res) => {
   try {
     const { name, email, phone, message } = req.body || {};
@@ -338,7 +363,7 @@ app.get('/api/products/:id', async (req, res) => {
  */
 app.post('/api/create-preference', async (req, res) => {
   try {
-    const { items, payer, shipments } = req.body;
+    const { items, payer, shipments, trace_id: traceId } = req.body;
 
     // Validar items
     if (!items || items.length === 0) {
@@ -436,6 +461,7 @@ app.post('/api/create-preference', async (req, res) => {
       
       // Metadata (para recuperar en el webhook)
       metadata: {
+        trace_id: traceId || '',
         platform: 'petmat-web',
         items_count: items.reduce((sum, item) => sum + item.quantity, 0),
         customer_email: payer?.email || '',
@@ -450,21 +476,35 @@ app.post('/api/create-preference', async (req, res) => {
       }
     };
 
-    console.log('📦 Creando preferencia de pago para:', payer?.email || 'sin email');
+    console.log('📦 Creando preferencia de pago', {
+      trace_id: traceId || null,
+      payer_email: payer?.email || 'sin email',
+      items_count: items?.length || 0,
+      external_reference: externalReference
+    });
 
     const response = await preference.create({ body: preferenceData });
 
-    console.log('✅ Preferencia creada:', response.id);
+    console.log('✅ Preferencia creada', {
+      trace_id: traceId || null,
+      preference_id: response.id,
+      external_reference: externalReference
+    });
 
     res.json({
       id: response.id,
       init_point: response.init_point,
       sandbox_init_point: response.sandbox_init_point,
-      external_reference: externalReference
+      external_reference: externalReference,
+      trace_id: traceId || null
     });
 
   } catch (error) {
-    console.error('❌ Error al crear preferencia:', error);
+    console.error('❌ Error al crear preferencia:', {
+      message: error?.message,
+      cause: error?.cause || null,
+      stack: error?.stack || null
+    });
     res.status(500).json({
       error: 'Error al crear la preferencia de pago',
       message: error.message
