@@ -23,6 +23,8 @@ initFirebaseAdmin();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const FRONTEND_BASE_URL = process.env.FRONTEND_URL || 'https://petmat.cl';
+const BACKEND_BASE_URL = process.env.BACKEND_URL
+  || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '');
 
 function formatPriceForGoogle(price, currency) {
   return `${Number(price).toFixed(2)} ${currency}`;
@@ -423,15 +425,19 @@ app.post('/api/create-preference', async (req, res) => {
     // Generar external_reference único
     const externalReference = `petmat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+    if (!BACKEND_BASE_URL) {
+      console.warn('⚠️ BACKEND_URL no configurado; webhook de Mercado Pago quedará deshabilitado');
+    }
+
     // Crear preferencia de Mercado Pago
     const preferenceData = {
       items: normalizedItems,
       
       // URLs de retorno
       back_urls: {
-        success: `${process.env.FRONTEND_URL}/success`,
-        failure: `${process.env.FRONTEND_URL}/error`,
-        pending: `${process.env.FRONTEND_URL}/success`
+        success: `${FRONTEND_BASE_URL}/success`,
+        failure: `${FRONTEND_BASE_URL}/error`,
+        pending: `${FRONTEND_BASE_URL}/pending`
       },
       
       auto_return: 'approved',
@@ -457,7 +463,7 @@ app.post('/api/create-preference', async (req, res) => {
       },
       
       // Webhook URL
-      notification_url: `${process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN}/api/webhook`,
+      notification_url: BACKEND_BASE_URL ? `${BACKEND_BASE_URL}/api/webhook` : undefined,
       
       // Metadata (para recuperar en el webhook)
       metadata: {
