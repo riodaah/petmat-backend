@@ -16,6 +16,7 @@ import sgMail from '@sendgrid/mail';
 import dotenv from 'dotenv';
 import { initFirebaseAdmin } from './firebaseAdmin.js';
 import { getActiveProducts, getAllProducts, getProductById } from './productCatalogService.js';
+import { upsertOrderFromPayment } from './orderStoreService.js';
 
 dotenv.config();
 initFirebaseAdmin();
@@ -564,6 +565,7 @@ async function processPaymentNotification(paymentId) {
 
       // Extraer información del metadata
       const metadata = paymentInfo.metadata || {};
+      await upsertOrderFromPayment(paymentInfo);
       
       const orderData = {
         paymentId: paymentInfo.id,
