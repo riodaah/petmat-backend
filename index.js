@@ -81,6 +81,10 @@ function formatCurrency(value) {
   return `$${Number(value || 0).toLocaleString('es-CL')}`;
 }
 
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
 function buildItemsSummary(items = []) {
   if (!items.length) {
     return 'Sin productos';
@@ -108,7 +112,9 @@ async function sendEmailJsTemplate(templateId, templateParams, logLabel) {
 }
 
 async function sendContactMessage(payload) {
-  const toEmail = process.env.CONTACT_TO_EMAIL || process.env.ADMIN_EMAIL || 'da.morande@gmail.com';
+  const toEmail = normalizeEmail(process.env.CONTACT_TO_EMAIL || process.env.ADMIN_EMAIL || 'da.morande@gmail.com');
+  const fromEmail = normalizeEmail(process.env.EMAILJS_FROM_EMAIL || process.env.ADMIN_EMAIL || toEmail);
+  const replyTo = normalizeEmail(payload.email);
   const fromName = process.env.EMAILJS_FROM_NAME || 'PetMAT';
   const subject = `Nuevo contacto web - ${payload.name}`;
 
@@ -139,7 +145,9 @@ async function sendContactMessage(payload) {
     {
       to_email: toEmail,
       to_name: 'Equipo PetMAT',
+      from_email: fromEmail,
       from_name: fromName,
+      reply_to: replyTo,
       subject,
       customer_name: payload.name,
       customer_email: payload.email,
@@ -571,7 +579,7 @@ async function processPaymentNotification(paymentId) {
         paymentId: paymentInfo.id,
         orderNumber: paymentInfo.external_reference || `MP-${paymentInfo.id}`,
         customerName: metadata.customer_name || 'Cliente',
-        email: metadata.customer_email || paymentInfo.payer?.email || '',
+        email: normalizeEmail(metadata.customer_email || paymentInfo.payer?.email || ''),
         phone: metadata.customer_phone || '',
         items: paymentInfo.additional_info?.items || [],
         subtotal: metadata.subtotal || 0,
@@ -591,16 +599,19 @@ async function processPaymentNotification(paymentId) {
       }
 
       // Email del administrador
-      const adminEmail = process.env.ADMIN_EMAIL || 'da.morande@gmail.com';
+      const adminEmail = normalizeEmail(process.env.ADMIN_EMAIL || 'da.morande@gmail.com');
       const customerTemplateId = process.env.EMAILJS_TEMPLATE_ID_CUSTOMER;
       const adminTemplateId = process.env.EMAILJS_TEMPLATE_ID_ADMIN;
       const fromName = process.env.EMAILJS_FROM_NAME || 'PetMAT';
+      const fromEmail = normalizeEmail(process.env.EMAILJS_FROM_EMAIL || adminEmail);
       const itemsSummary = buildItemsSummary(orderData.items);
 
       const customerParams = {
         to_email: orderData.email,
         to_name: orderData.customerName,
+        from_email: fromEmail,
         from_name: fromName,
+        reply_to: adminEmail,
         order_number: orderData.orderNumber,
         payment_id: orderData.paymentId,
         customer_name: orderData.customerName,
@@ -616,7 +627,9 @@ async function processPaymentNotification(paymentId) {
       const adminParams = {
         to_email: adminEmail,
         to_name: 'Admin PetMAT',
+        from_email: fromEmail,
         from_name: fromName,
+        reply_to: orderData.email,
         order_number: orderData.orderNumber,
         payment_id: orderData.paymentId,
         customer_name: orderData.customerName,
