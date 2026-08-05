@@ -5,14 +5,12 @@
  * Este servidor maneja:
  * - Creación de preferencias de pago (seguras, sin exponer Access Token)
  * - Webhooks de Mercado Pago (notificaciones de pago)
- * - Envío de emails automáticos (confirmación al cliente y notificación al admin)
+ * - Envío de emails automáticos vía Resend (confirmación al cliente y notificación al admin)
  */
 
 import express from 'express';
 import cors from 'cors';
 import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
-import emailjs from '@emailjs/nodejs';
-import sgMail from '@sendgrid/mail';
 import dotenv from 'dotenv';
 import { initFirebaseAdmin } from './firebaseAdmin.js';
 import { getActiveProducts, getAllProducts, getProductById } from './productCatalogService.js';
@@ -95,68 +93,114 @@ function buildItemsSummary(items = []) {
     .join('\n');
 }
 
-async function sendEmailJsTemplate(templateId, templateParams, logLabel) {
-  const serviceId = process.env.EMAILJS_SERVICE_ID;
-  const publicKey = process.env.EMAILJS_PUBLIC_KEY;
-  const privateKey = process.env.EMAILJS_PRIVATE_KEY;
+// Remitente por defecto: onboarding@resend.dev funciona sin dominio verificado
+// (pero solo permite enviar al dueño de la cuenta Resend). Una vez verificado
+// petmat.cl en Resend, configurar RESEND_FROM_EMAIL="PetMAT <info@petmat.cl>".
+const RESEND_FROM = process.env.RESEND_FROM_EMAIL || 'PetMAT <onboarding@resend.dev>';
 
-  if (!serviceId || !publicKey || !privateKey || !templateId) {
-    console.warn(`⚠️ EmailJS incompleto para ${logLabel}, envío omitido`);
-    return;
+async function sendResendEmail({ to, subject, html, text, replyTo }, logLabel) {
+  const apiKey = process.env.RESEND_API_KEY;
+
+  if (!apiKey || !to) {
+    console.warn(`⚠️ Resend incompleto para ${logLabel}, envío omitido`);
+    return null;
   }
 
-  await emailjs.send(serviceId, templateId, templateParams, {
-    publicKey,
-    privateKey
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: RESEND_FROM,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html,
+      text,
+      reply_to: replyTo || undefined
+    })
   });
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(`Resend ${logLabel} falló (${response.status}): ${result?.message || 'error desconocido'}`);
+  }
+
+  console.log(`✅ Resend enviado (${logLabel}):`, result?.id || 'sin id');
+  return result;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function buildOrderEmailHtml({ heading, intro, orderData, itemsSummary }) {
+  const itemsHtml = itemsSummary
+    .split('\n')
+    .map((line) => `<li>${escapeHtml(line.replace(/^- /, ''))}</li>`)
+    .join('');
+
+  return `
+  <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+    <h2 style="color: #2A9DBF;">${escapeHtml(heading)}</h2>
+    <p>${escapeHtml(intro)}</p>
+    <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+      <tr><td style="padding: 6px 0;"><strong>Orden:</strong></td><td>${escapeHtml(orderData.orderNumber)}</td></tr>
+      <tr><td style="padding: 6px 0;"><strong>Payment ID:</strong></td><td>${escapeHtml(orderData.paymentId)}</td></tr>
+      <tr><td style="padding: 6px 0;"><strong>Cliente:</strong></td><td>${escapeHtml(orderData.customerName)}</td></tr>
+      <tr><td style="padding: 6px 0;"><strong>Email:</strong></td><td>${escapeHtml(orderData.email)}</td></tr>
+      <tr><td style="padding: 6px 0;"><strong>Teléfono:</strong></td><td>${escapeHtml(orderData.phone || 'No informado')}</td></tr>
+      <tr><td style="padding: 6px 0;"><strong>Dirección de envío:</strong></td><td>${escapeHtml(`${orderData.shippingAddress.street}, ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}`)}</td></tr>
+    </table>
+    <h3 style="color: #2A9DBF;">Productos</h3>
+    <ul>${itemsHtml}</ul>
+    <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+      <tr><td style="padding: 4px 0;">Subtotal:</td><td style="text-align: right;">${escapeHtml(formatCurrency(orderData.subtotal))}</td></tr>
+      <tr><td style="padding: 4px 0;">Envío:</td><td style="text-align: right;">${escapeHtml(formatCurrency(orderData.shippingCost))}</td></tr>
+      <tr><td style="padding: 4px 0;"><strong>Total:</strong></td><td style="text-align: right;"><strong>${escapeHtml(formatCurrency(orderData.total))}</strong></td></tr>
+    </table>
+    <p style="color: #888; font-size: 12px;">PetMAT · https://petmat.cl</p>
+  </div>`;
 }
 
 async function sendContactMessage(payload) {
   const toEmail = normalizeEmail(process.env.CONTACT_TO_EMAIL || process.env.ADMIN_EMAIL || 'da.morande@gmail.com');
-  const fromEmail = normalizeEmail(process.env.EMAILJS_FROM_EMAIL || process.env.ADMIN_EMAIL || toEmail);
   const replyTo = normalizeEmail(payload.email);
-  const fromName = process.env.EMAILJS_FROM_NAME || 'PetMAT';
   const subject = `Nuevo contacto web - ${payload.name}`;
 
-  // Priorizar SendGrid si está configurado
-  if (process.env.SENDGRID_API_KEY) {
-    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || toEmail;
-    await sgMail.send({
-      to: toEmail,
-      from: fromEmail,
-      subject,
-      text: [
-        `Nombre: ${payload.name}`,
-        `Email: ${payload.email}`,
-        `Teléfono: ${payload.phone || 'No informado'}`,
-        '',
-        payload.message
-      ].join('\n')
-    });
-    return { provider: 'sendgrid' };
-  }
+  const text = [
+    `Nombre: ${payload.name}`,
+    `Email: ${payload.email}`,
+    `Teléfono: ${payload.phone || 'No informado'}`,
+    '',
+    payload.message
+  ].join('\n');
 
-  // Fallback a EmailJS backend
-  const contactTemplateId =
-    process.env.EMAILJS_TEMPLATE_ID_CONTACT || process.env.EMAILJS_TEMPLATE_ID_ADMIN;
-  await sendEmailJsTemplate(
-    contactTemplateId,
+  await sendResendEmail(
     {
-      to_email: toEmail,
-      to_name: 'Equipo PetMAT',
-      from_email: fromEmail,
-      from_name: fromName,
-      reply_to: replyTo,
+      to: toEmail,
       subject,
-      customer_name: payload.name,
-      customer_email: payload.email,
-      customer_phone: payload.phone || 'No informado',
-      message: payload.message
+      text,
+      html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <h2 style="color: #2A9DBF;">Nuevo mensaje de contacto</h2>
+        <p><strong>Nombre:</strong> ${escapeHtml(payload.name)}</p>
+        <p><strong>Email:</strong> ${escapeHtml(payload.email)}</p>
+        <p><strong>Teléfono:</strong> ${escapeHtml(payload.phone || 'No informado')}</p>
+        <p><strong>Mensaje:</strong></p>
+        <p>${escapeHtml(payload.message).replace(/\n/g, '<br/>')}</p>
+      </div>`,
+      replyTo
     },
     'contacto'
   );
-  return { provider: 'emailjs' };
+  return { provider: 'resend' };
 }
 
 // Middleware - CORS configurado para petmat.cl y variantes
@@ -600,60 +644,75 @@ async function processPaymentNotification(paymentId) {
 
       // Email del administrador
       const adminEmail = normalizeEmail(process.env.ADMIN_EMAIL || 'da.morande@gmail.com');
-      const customerTemplateId = process.env.EMAILJS_TEMPLATE_ID_CUSTOMER;
-      const adminTemplateId = process.env.EMAILJS_TEMPLATE_ID_ADMIN;
-      const fromName = process.env.EMAILJS_FROM_NAME || 'PetMAT';
-      const fromEmail = normalizeEmail(process.env.EMAILJS_FROM_EMAIL || adminEmail);
       const itemsSummary = buildItemsSummary(orderData.items);
 
-      const customerParams = {
-        to_email: orderData.email,
-        to_name: orderData.customerName,
-        from_email: fromEmail,
-        from_name: fromName,
-        reply_to: adminEmail,
-        order_number: orderData.orderNumber,
-        payment_id: orderData.paymentId,
-        customer_name: orderData.customerName,
-        customer_email: orderData.email,
-        customer_phone: orderData.phone,
-        shipping_address: `${orderData.shippingAddress.street}, ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}`,
-        items_summary: itemsSummary,
-        subtotal: formatCurrency(orderData.subtotal),
-        shipping_cost: formatCurrency(orderData.shippingCost),
-        total: formatCurrency(orderData.total)
-      };
-
-      const adminParams = {
-        to_email: adminEmail,
-        to_name: 'Admin PetMAT',
-        from_email: fromEmail,
-        from_name: fromName,
-        reply_to: orderData.email,
-        order_number: orderData.orderNumber,
-        payment_id: orderData.paymentId,
-        customer_name: orderData.customerName,
-        customer_email: orderData.email,
-        customer_phone: orderData.phone,
-        shipping_address: `${orderData.shippingAddress.street}, ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}`,
-        items_summary: itemsSummary,
-        subtotal: formatCurrency(orderData.subtotal),
-        shipping_cost: formatCurrency(orderData.shippingCost),
-        total: formatCurrency(orderData.total)
-      };
-
       try {
-        await sendEmailJsTemplate(customerTemplateId, customerParams, 'cliente');
-        console.log('✅ EmailJS enviado al cliente:', orderData.email);
+        await sendResendEmail(
+          {
+            to: adminEmail,
+            subject: `🛒 Nueva venta ${orderData.orderNumber} - ${formatCurrency(orderData.total)}`,
+            text: [
+              `Nueva venta en petmat.cl`,
+              `Orden: ${orderData.orderNumber}`,
+              `Payment ID: ${orderData.paymentId}`,
+              `Cliente: ${orderData.customerName} (${orderData.email})`,
+              `Teléfono: ${orderData.phone || 'No informado'}`,
+              `Dirección: ${orderData.shippingAddress.street}, ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}`,
+              '',
+              'Productos:',
+              itemsSummary,
+              '',
+              `Subtotal: ${formatCurrency(orderData.subtotal)}`,
+              `Envío: ${formatCurrency(orderData.shippingCost)}`,
+              `Total: ${formatCurrency(orderData.total)}`
+            ].join('\n'),
+            html: buildOrderEmailHtml({
+              heading: 'Nueva venta en petmat.cl',
+              intro: 'Se registró una nueva compra pagada. Detalle para despacho:',
+              orderData,
+              itemsSummary
+            }),
+            replyTo: orderData.email
+          },
+          'admin'
+        );
       } catch (emailError) {
-        console.error('❌ Error EmailJS cliente:', emailError);
+        console.error('❌ Error Resend admin:', emailError.message);
       }
 
       try {
-        await sendEmailJsTemplate(adminTemplateId, adminParams, 'admin');
-        console.log('✅ EmailJS enviado al admin:', adminEmail);
+        await sendResendEmail(
+          {
+            to: orderData.email,
+            subject: `Confirmación de tu compra en PetMAT (${orderData.orderNumber})`,
+            text: [
+              `Hola ${orderData.customerName},`,
+              '',
+              'Recibimos tu compra y ya la estamos preparando.',
+              '',
+              'Productos:',
+              itemsSummary,
+              '',
+              `Subtotal: ${formatCurrency(orderData.subtotal)}`,
+              `Envío: ${formatCurrency(orderData.shippingCost)}`,
+              `Total: ${formatCurrency(orderData.total)}`,
+              '',
+              `Dirección de envío: ${orderData.shippingAddress.street}, ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}`,
+              '',
+              'Gracias por preferir PetMAT.'
+            ].join('\n'),
+            html: buildOrderEmailHtml({
+              heading: '¡Gracias por tu compra!',
+              intro: 'Recibimos tu pedido y ya lo estamos preparando. Este es el detalle:',
+              orderData,
+              itemsSummary
+            }),
+            replyTo: adminEmail
+          },
+          'cliente'
+        );
       } catch (emailError) {
-        console.error('❌ Error EmailJS admin:', emailError);
+        console.error('❌ Error Resend cliente:', emailError.message);
       }
 
     } else {
@@ -673,7 +732,7 @@ app.listen(PORT, () => {
   🚀 Servidor corriendo en puerto ${PORT}
   🌐 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:5173'}
   💳 Mercado Pago configurado: ${process.env.MP_ACCESS_TOKEN ? '✅' : '❌'}
-  📧 EmailJS configurado: ${process.env.EMAILJS_SERVICE_ID && process.env.EMAILJS_PUBLIC_KEY && process.env.EMAILJS_PRIVATE_KEY ? '✅' : '❌'}
+  📧 Resend configurado: ${process.env.RESEND_API_KEY ? '✅' : '❌'} (from: ${RESEND_FROM})
   `);
 });
 
