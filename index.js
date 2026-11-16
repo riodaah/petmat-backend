@@ -83,6 +83,91 @@ function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function toNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function buildCustomerNameFromPayer(payer = {}) {
+  const fullName = `${payer.first_name || ''} ${payer.last_name || ''}`.trim();
+  return fullName || payer.name || '';
+}
+
+function normalizeCouponCode(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function resolveCoupon(code) {
+  const normalized = normalizeCouponCode(code);
+  if (normalized === 'IPSOS') {
+    return {
+      code: normalized,
+      discountRate: 0.2
+    };
+  }
+  return null;
+}
+
+function applyCouponToItems(items, coupon) {
+  if (!coupon) {
+    const subtotal = items.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
+    return {
+      items,
+      subtotal,
+      discountAmount: 0,
+      discountedSubtotal: subtotal
+    };
+  }
+
+  const subtotal = items.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
+  const targetDiscount = Number((subtotal * coupon.discountRate).toFixed(2));
+  let discountRemaining = targetDiscount;
+
+  const discountedItems = items.map((item, index) => {
+    const lineTotal = item.unit_price * item.quantity;
+    const proportional = index === items.length - 1
+      ? discountRemaining
+      : Number((targetDiscount * (lineTotal / subtotal)).toFixed(2));
+    discountRemaining = Number((discountRemaining - proportional).toFixed(2));
+    const discountedLineTotal = Math.max(0, Number((lineTotal - proportional).toFixed(2)));
+    const discountedUnitPrice = Number((discountedLineTotal / item.quantity).toFixed(2));
+    return {
+      ...item,
+      unit_price: discountedUnitPrice
+    };
+  });
+
+  const discountedSubtotal = discountedItems.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
+  const discountAmount = Number((subtotal - discountedSubtotal).toFixed(2));
+
+  return {
+    items: discountedItems,
+    subtotal,
+    discountAmount,
+    discountedSubtotal: Number(discountedSubtotal.toFixed(2))
+  };
+}
+
+function getAdminRecipients() {
+  const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const splitEmails = (value) => String(value || '')
+    .split(/[,;\n]+/)
+    .map((email) => normalizeEmail(email))
+    .filter(Boolean);
+
+  const fromAdminEmails = splitEmails(process.env.ADMIN_EMAILS);
+  const fromAdminEmailFallback = splitEmails(process.env.ADMIN_EMAIL || 'da.morande@gmail.com');
+  const rawList = [...fromAdminEmails, ...fromAdminEmailFallback];
+
+  const validList = rawList.filter(isValidEmail);
+  const invalidList = rawList.filter((email) => !isValidEmail(email));
+  if (invalidList.length > 0) {
+    console.warn('⚠️ ADMIN_EMAILS contiene correos inválidos, se omiten:', invalidList);
+  }
+
+  return [...new Set(validList)];
+}
+
 function buildItemsSummary(items = []) {
   if (!items.length) {
     return 'Sin productos';
@@ -145,6 +230,9 @@ function buildOrderEmailHtml({ heading, intro, orderData, itemsSummary }) {
     .split('\n')
     .map((line) => `<li>${escapeHtml(line.replace(/^- /, ''))}</li>`)
     .join('');
+  const couponRow = orderData.couponCode
+    ? `<tr><td style="padding: 4px 0;">Cupón ${escapeHtml(orderData.couponCode)}:</td><td style="text-align: right;">-${escapeHtml(formatCurrency(orderData.discountAmount || 0))}</td></tr>`
+    : '';
 
   return `
   <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
@@ -161,6 +249,7 @@ function buildOrderEmailHtml({ heading, intro, orderData, itemsSummary }) {
     <h3 style="color: #2A9DBF;">Productos</h3>
     <ul>${itemsHtml}</ul>
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+      ${couponRow}
       <tr><td style="padding: 4px 0;">Subtotal:</td><td style="text-align: right;">${escapeHtml(formatCurrency(orderData.subtotal))}</td></tr>
       <tr><td style="padding: 4px 0;">Envío:</td><td style="text-align: right;">${escapeHtml(formatCurrency(orderData.shippingCost))}</td></tr>
       <tr><td style="padding: 4px 0;"><strong>Total:</strong></td><td style="text-align: right;"><strong>${escapeHtml(formatCurrency(orderData.total))}</strong></td></tr>
@@ -170,7 +259,7 @@ function buildOrderEmailHtml({ heading, intro, orderData, itemsSummary }) {
 }
 
 async function sendContactMessage(payload) {
-  const toEmail = normalizeEmail(process.env.CONTACT_TO_EMAIL || process.env.ADMIN_EMAIL || 'da.morande@gmail.com');
+  const toEmail = getAdminRecipients();
   const replyTo = normalizeEmail(payload.email);
   const subject = `Nuevo contacto web - ${payload.name}`;
 
@@ -418,7 +507,7 @@ app.get('/api/products/:id', async (req, res) => {
  */
 app.post('/api/create-preference', async (req, res) => {
   try {
-    const { items, payer, shipments, trace_id: traceId } = req.body;
+    const { items, payer, shipments, trace_id: traceId, fulfillment_type: fulfillmentTypeRaw, coupon_code: couponCodeRaw } = req.body;
 
     // Validar items
     if (!items || items.length === 0) {
@@ -470,10 +559,20 @@ app.post('/api/create-preference', async (req, res) => {
     }
 
     // Calcular totales desde catálogo servidor (no confiar en frontend)
-    const subtotal = normalizedItems.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
+    const coupon = resolveCoupon(couponCodeRaw);
+    const {
+      items: pricedItems,
+      subtotal,
+      discountAmount,
+      discountedSubtotal
+    } = applyCouponToItems(normalizedItems, coupon);
     const isRM = payer?.address?.state_name?.toLowerCase().includes('metropolitana');
-    const shippingCost = isRM ? 0 : 3990;
-    const total = subtotal + shippingCost;
+    const fulfillmentType = fulfillmentTypeRaw === 'pickup' ? 'pickup' : 'delivery';
+    const requestShippingCost = toNumber(shipments?.cost, -1);
+    const shippingCost = requestShippingCost >= 0 ? requestShippingCost : (isRM ? 0 : 3990);
+    const effectiveShippingCost = fulfillmentType === 'pickup' ? 0 : shippingCost;
+    const total = discountedSubtotal + effectiveShippingCost;
+    const customerName = buildCustomerNameFromPayer(payer);
 
     // Generar external_reference único
     const externalReference = `petmat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -484,7 +583,7 @@ app.post('/api/create-preference', async (req, res) => {
 
     // Crear preferencia de Mercado Pago
     const preferenceData = {
-      items: normalizedItems,
+      items: pricedItems,
       
       // URLs de retorno
       back_urls: {
@@ -500,7 +599,7 @@ app.post('/api/create-preference', async (req, res) => {
       
       // Datos de envío
       shipments: shipments || {
-        cost: shippingCost,
+        cost: effectiveShippingCost,
         mode: 'not_specified'
       },
       
@@ -524,13 +623,18 @@ app.post('/api/create-preference', async (req, res) => {
         platform: 'petmat-web',
         items_count: items.reduce((sum, item) => sum + item.quantity, 0),
         customer_email: payer?.email || '',
-        customer_name: payer?.name || '',
+        customer_name: customerName,
         customer_phone: payer?.phone?.number || '',
         shipping_address: payer?.address?.street_name || '',
         shipping_city: payer?.address?.city_name || '',
         shipping_region: payer?.address?.state_name || '',
+        fulfillment_type: fulfillmentType,
+        coupon_code: coupon?.code || '',
+        coupon_discount_rate: coupon?.discountRate || 0,
+        coupon_discount_amount: discountAmount,
         subtotal: subtotal,
-        shipping_cost: shippingCost,
+        subtotal_after_discount: discountedSubtotal,
+        shipping_cost: effectiveShippingCost,
         total: total
       }
     };
@@ -539,6 +643,7 @@ app.post('/api/create-preference', async (req, res) => {
       trace_id: traceId || null,
       payer_email: payer?.email || 'sin email',
       items_count: items?.length || 0,
+      coupon_code: coupon?.code || null,
       external_reference: externalReference
     });
 
@@ -555,6 +660,8 @@ app.post('/api/create-preference', async (req, res) => {
       init_point: response.init_point,
       sandbox_init_point: response.sandbox_init_point,
       external_reference: externalReference,
+      coupon_code: coupon?.code || null,
+      discount_amount: discountAmount,
       trace_id: traceId || null
     });
 
@@ -618,22 +725,36 @@ async function processPaymentNotification(paymentId) {
       // Extraer información del metadata
       const metadata = paymentInfo.metadata || {};
       await upsertOrderFromPayment(paymentInfo);
+      const fallbackCustomerName = `${paymentInfo.payer?.first_name || ''} ${paymentInfo.payer?.last_name || ''}`.trim() || 'Cliente';
+      const paidTotal = toNumber(paymentInfo.transaction_details?.total_paid_amount, 0);
+      const shippingPaid = toNumber(paymentInfo.shipping_amount, 0);
+      const fulfillmentType = metadata.fulfillment_type === 'pickup' ? 'pickup' : 'delivery';
+      const couponCode = normalizeCouponCode(metadata.coupon_code || '');
+      const discountAmount = toNumber(metadata.coupon_discount_amount, 0);
+      const shippingAddress = {
+        street: metadata.shipping_address || paymentInfo.additional_info?.payer?.address?.street_name || paymentInfo.payer?.address?.street_name || '',
+        city: metadata.shipping_city || paymentInfo.payer?.address?.city_name || '',
+        region: metadata.shipping_region || paymentInfo.payer?.address?.state_name || ''
+      };
+      const calculatedSubtotal = (paymentInfo.additional_info?.items || []).reduce(
+        (sum, item) => sum + (toNumber(item.unit_price) * toNumber(item.quantity)),
+        0
+      );
       
       const orderData = {
         paymentId: paymentInfo.id,
         orderNumber: paymentInfo.external_reference || `MP-${paymentInfo.id}`,
-        customerName: metadata.customer_name || 'Cliente',
+        customerName: metadata.customer_name || fallbackCustomerName,
         email: normalizeEmail(metadata.customer_email || paymentInfo.payer?.email || ''),
-        phone: metadata.customer_phone || '',
+        phone: metadata.customer_phone || paymentInfo.additional_info?.payer?.phone?.number || paymentInfo.payer?.phone?.number || '',
         items: paymentInfo.additional_info?.items || [],
-        subtotal: metadata.subtotal || 0,
-        shippingCost: metadata.shipping_cost || 0,
-        total: paymentInfo.transaction_amount,
-        shippingAddress: {
-          street: metadata.shipping_address || '',
-          city: metadata.shipping_city || '',
-          region: metadata.shipping_region || ''
-        }
+        subtotal: toNumber(metadata.subtotal_after_discount, toNumber(metadata.subtotal, calculatedSubtotal)),
+        shippingCost: fulfillmentType === 'pickup' ? 0 : toNumber(metadata.shipping_cost, shippingPaid),
+        total: paidTotal || toNumber(metadata.total, paymentInfo.transaction_amount),
+        shippingAddress,
+        fulfillmentType,
+        couponCode: couponCode || null,
+        discountAmount
       };
 
       // Validar email del cliente
@@ -643,41 +764,46 @@ async function processPaymentNotification(paymentId) {
       }
 
       // Email del administrador
-      const adminEmail = normalizeEmail(process.env.ADMIN_EMAIL || 'da.morande@gmail.com');
+      const adminRecipients = getAdminRecipients();
       const itemsSummary = buildItemsSummary(orderData.items);
 
-      try {
-        await sendResendEmail(
-          {
-            to: adminEmail,
-            subject: `🛒 Nueva venta ${orderData.orderNumber} - ${formatCurrency(orderData.total)}`,
-            text: [
-              `Nueva venta en petmat.cl`,
-              `Orden: ${orderData.orderNumber}`,
-              `Payment ID: ${orderData.paymentId}`,
-              `Cliente: ${orderData.customerName} (${orderData.email})`,
-              `Teléfono: ${orderData.phone || 'No informado'}`,
-              `Dirección: ${orderData.shippingAddress.street}, ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}`,
-              '',
-              'Productos:',
-              itemsSummary,
-              '',
-              `Subtotal: ${formatCurrency(orderData.subtotal)}`,
-              `Envío: ${formatCurrency(orderData.shippingCost)}`,
-              `Total: ${formatCurrency(orderData.total)}`
-            ].join('\n'),
-            html: buildOrderEmailHtml({
-              heading: 'Nueva venta en petmat.cl',
-              intro: 'Se registró una nueva compra pagada. Detalle para despacho:',
-              orderData,
-              itemsSummary
-            }),
-            replyTo: orderData.email
-          },
-          'admin'
-        );
-      } catch (emailError) {
-        console.error('❌ Error Resend admin:', emailError.message);
+      if (adminRecipients.length === 0) {
+        console.error('❌ No hay destinatarios admin válidos (ADMIN_EMAILS / ADMIN_EMAIL).');
+      } else {
+        try {
+          await sendResendEmail(
+            {
+              to: adminRecipients,
+              subject: `🛒 Nueva venta ${orderData.orderNumber} - ${formatCurrency(orderData.total)}`,
+              text: [
+                `Nueva venta en petmat.cl`,
+                `Orden: ${orderData.orderNumber}`,
+                `Payment ID: ${orderData.paymentId}`,
+                `Cliente: ${orderData.customerName} (${orderData.email})`,
+                `Teléfono: ${orderData.phone || 'No informado'}`,
+                `Dirección: ${orderData.shippingAddress.street}, ${orderData.shippingAddress.city}, ${orderData.shippingAddress.region}`,
+                '',
+                'Productos:',
+                itemsSummary,
+                '',
+                ...(orderData.couponCode ? [`Cupón aplicado: ${orderData.couponCode} (-${formatCurrency(orderData.discountAmount)})`, ''] : []),
+                `Subtotal: ${formatCurrency(orderData.subtotal)}`,
+                `Envío: ${formatCurrency(orderData.shippingCost)}`,
+                `Total: ${formatCurrency(orderData.total)}`
+              ].join('\n'),
+              html: buildOrderEmailHtml({
+                heading: 'Nueva venta en petmat.cl',
+                intro: 'Se registró una nueva compra pagada. Detalle para despacho:',
+                orderData,
+                itemsSummary
+              }),
+              replyTo: orderData.email
+            },
+            'admin'
+          );
+        } catch (emailError) {
+          console.error('❌ Error Resend admin:', emailError.message);
+        }
       }
 
       try {
@@ -693,6 +819,7 @@ async function processPaymentNotification(paymentId) {
               'Productos:',
               itemsSummary,
               '',
+              ...(orderData.couponCode ? [`Cupón aplicado: ${orderData.couponCode} (-${formatCurrency(orderData.discountAmount)})`, ''] : []),
               `Subtotal: ${formatCurrency(orderData.subtotal)}`,
               `Envío: ${formatCurrency(orderData.shippingCost)}`,
               `Total: ${formatCurrency(orderData.total)}`,
@@ -707,7 +834,7 @@ async function processPaymentNotification(paymentId) {
               orderData,
               itemsSummary
             }),
-            replyTo: adminEmail
+            replyTo: adminRecipients[0]
           },
           'cliente'
         );
