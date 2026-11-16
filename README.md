@@ -371,3 +371,10 @@ npm install
 **Versión:** 2.0.0  
 **Arquitectura:** Frontend (Amplify) + Backend (Railway)  
 **Inspirado en:** Astrochoc.cl
+
+## Cupones, envío y límites (noviembre 2026)
+
+- **Cupones**: variable `COUPONS` con el formato `CODIGO:descuento` separados por coma, por ejemplo `COUPONS=VERANO:0.2,AMIGOS:0.1`. Los códigos no van en el código. El frontend los valida con `POST /api/validate-coupon`.
+- **Envío**: se calcula en el servidor (`shipping.js`): RM $2.990, zona centro $5.600, zonas extremas $9.500, un envío por cada 3 unidades, $0 con retiro en persona. El monto que envía el navegador se ignora.
+- **CORS**: solo orígenes exactos (`petmat.cl`, `www.petmat.cl`, `petmat-8d651.web.app`, `FRONTEND_URL` y `ALLOWED_ORIGINS`).
+- **Límite por IP** cada 15 minutos: contacto 5, cupones 10, checkout 30.

@@ -10,6 +10,8 @@
 
 import express from 'express';
 import cors from 'cors';
+import { calculateShippingCost } from './shipping.js';
+import { rateLimit } from './rateLimit.js';
 import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
 import dotenv from 'dotenv';
 import { initFirebaseAdmin } from './firebaseAdmin.js';
@@ -97,15 +99,31 @@ function normalizeCouponCode(value) {
   return String(value || '').trim().toUpperCase();
 }
 
+// Cupones: variable de entorno COUPONS con el formato CODIGO:descuento,
+// separados por coma. Ejemplo: COUPONS=VERANO:0.2,AMIGOS:0.1
+// Los códigos viven solo en el servidor; no van en el código ni en el frontend.
+function loadCoupons() {
+  const coupons = new Map();
+  for (const entry of String(process.env.COUPONS || '').split(',')) {
+    const [rawCode, rawRate] = entry.split(':');
+    const code = normalizeCouponCode(rawCode);
+    const discountRate = Number(rawRate);
+    if (!code) continue;
+    if (!(discountRate > 0 && discountRate < 1)) {
+      console.warn(`⚠️ Cupón ${code} ignorado: el descuento debe ser un número entre 0 y 1`);
+      continue;
+    }
+    coupons.set(code, discountRate);
+  }
+  return coupons;
+}
+
+const COUPONS = loadCoupons();
+
 function resolveCoupon(code) {
   const normalized = normalizeCouponCode(code);
-  if (normalized === 'IPSOS') {
-    return {
-      code: normalized,
-      discountRate: 0.2
-    };
-  }
-  return null;
+  if (!normalized || !COUPONS.has(normalized)) return null;
+  return { code: normalized, discountRate: COUPONS.get(normalized) };
 }
 
 function applyCouponToItems(items, coupon) {
@@ -308,7 +326,8 @@ app.use(cors({
     // Permitir requests sin origin (como mobile apps o curl)
     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.some(allowed => origin.includes(allowed.replace(/^https?:\/\//, '')))) {
+    // Coincidencia exacta: "petmat.cl.otro-sitio.com" no debe pasar.
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(null, false);
@@ -319,9 +338,27 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 
-app.post('/api/checkout-diagnostics', (req, res) => {
+// Railway pone un proxy delante; así req.ip es la IP real del cliente.
+app.set('trust proxy', 1);
+
+const contactLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5 });
+const couponLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+const checkoutLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30 });
+const diagnosticsLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 60 });
+
+/**
+ * Valida un cupón sin revelar los códigos existentes.
+ * POST /api/validate-coupon  { code }
+ */
+app.post('/api/validate-coupon', couponLimiter, (req, res) => {
+  const coupon = resolveCoupon(req.body?.code);
+  if (!coupon) return res.json({ valid: false });
+  return res.json({ valid: true, code: coupon.code, discount_rate: coupon.discountRate });
+});
+
+app.post('/api/checkout-diagnostics', diagnosticsLimiter, (req, res) => {
   try {
     const payload = req.body || {};
     const traceId = payload.trace_id || `diag_${Date.now()}`;
@@ -346,7 +383,7 @@ app.post('/api/checkout-diagnostics', (req, res) => {
   }
 });
 
-app.post('/api/contact', async (req, res) => {
+app.post('/api/contact', contactLimiter, async (req, res) => {
   try {
     const { name, email, phone, message } = req.body || {};
 
@@ -505,9 +542,9 @@ app.get('/api/products/:id', async (req, res) => {
  * Endpoint para crear preferencia de pago
  * POST /api/create-preference
  */
-app.post('/api/create-preference', async (req, res) => {
+app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
   try {
-    const { items, payer, shipments, trace_id: traceId, fulfillment_type: fulfillmentTypeRaw, coupon_code: couponCodeRaw } = req.body;
+    const { items, payer, trace_id: traceId, fulfillment_type: fulfillmentTypeRaw, coupon_code: couponCodeRaw } = req.body;
 
     // Validar items
     if (!items || items.length === 0) {
@@ -566,11 +603,14 @@ app.post('/api/create-preference', async (req, res) => {
       discountAmount,
       discountedSubtotal
     } = applyCouponToItems(normalizedItems, coupon);
-    const isRM = payer?.address?.state_name?.toLowerCase().includes('metropolitana');
     const fulfillmentType = fulfillmentTypeRaw === 'pickup' ? 'pickup' : 'delivery';
-    const requestShippingCost = toNumber(shipments?.cost, -1);
-    const shippingCost = requestShippingCost >= 0 ? requestShippingCost : (isRM ? 0 : 3990);
-    const effectiveShippingCost = fulfillmentType === 'pickup' ? 0 : shippingCost;
+    // El envío se calcula aquí; el monto que mande el navegador no se usa.
+    const totalUnits = normalizedItems.reduce((sum, item) => sum + item.quantity, 0);
+    const effectiveShippingCost = calculateShippingCost({
+      region: payer?.address?.state_name,
+      totalUnits,
+      fulfillmentType
+    });
     const total = discountedSubtotal + effectiveShippingCost;
     const customerName = buildCustomerNameFromPayer(payer);
 
@@ -598,7 +638,7 @@ app.post('/api/create-preference', async (req, res) => {
       payer: payer || undefined,
       
       // Datos de envío
-      shipments: shipments || {
+      shipments: {
         cost: effectiveShippingCost,
         mode: 'not_specified'
       },
@@ -662,6 +702,8 @@ app.post('/api/create-preference', async (req, res) => {
       external_reference: externalReference,
       coupon_code: coupon?.code || null,
       discount_amount: discountAmount,
+      shipping_cost: effectiveShippingCost,
+      total,
       trace_id: traceId || null
     });
 
